@@ -1,0 +1,56 @@
+name: generate-rationale
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'process at most N records (0 = all remaining)'
+        required: false
+        default: '0'
+      workers:
+        description: 'concurrent workers (keep low: Groq free tier TPM is the real bottleneck)'
+        required: false
+        default: '2'
+
+concurrency:
+  group: dataset-generate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      - name: Generate rationale batch
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          python -m src.datasets.diversify_rationale \
+            --backend groq \
+            --model llama-3.3-70b-versatile \
+            --evidence-index-file dataset/instruction/evidence_grounded_seed/evidence_index.json \
+            --resume \
+            --workers "${{ github.event.inputs.workers || '2' }}" \
+            --limit "${{ github.event.inputs.limit || '0' }}"
+
+      - name: Commit results back to repo
+        run: |
+          git config user.name "dataset-worker-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add dataset/instruction/evidence_grounded_seed/records_reasoning.jsonl \
+                  dataset/instruction/evidence_grounded_seed/records_reasoning_stats.json
+          git diff --cached --quiet || git commit -m "chore: rationale batch $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push

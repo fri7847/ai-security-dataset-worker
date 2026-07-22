@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "task_type", "prompt", "evidence_ids", "rationale", "answer", "source_record_ids", "authorized_scope", "split"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "task_type": {"type": "string", "minLength": 1},
+    "prompt": {"type": "string", "minLength": 1},
+    "evidence_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "rationale": {"type": "string", "minLength": 1},
+    "answer": {"type": "string", "minLength": 1},
+    "source_record_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "authorized_scope": {"type": "string", "minLength": 1},
+    "split": {"type": "string", "enum": ["train", "eval"]}
+  }
+}
