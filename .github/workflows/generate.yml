@@ -34,23 +34,58 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Generate rationale batch
+      - name: Generate rationale in checkpointed chunks
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
-          python -m src.datasets.diversify_rationale \
-            --backend groq \
-            --model llama-3.3-70b-versatile \
-            --evidence-index-file dataset/instruction/evidence_grounded_seed/evidence_index.json \
-            --resume \
-            --workers "${{ github.event.inputs.workers || '2' }}" \
-            --limit "${{ github.event.inputs.limit || '0' }}"
-
-      - name: Commit results back to repo
-        run: |
+          set -e
           git config user.name "dataset-worker-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add dataset/instruction/evidence_grounded_seed/records_reasoning.jsonl \
-                  dataset/instruction/evidence_grounded_seed/records_reasoning_stats.json
-          git diff --cached --quiet || git commit -m "chore: rationale batch $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          git push
+
+          OUT=dataset/instruction/evidence_grounded_seed/records_reasoning.jsonl
+          STATS=dataset/instruction/evidence_grounded_seed/records_reasoning_stats.json
+          TOTAL_LIMIT="${{ github.event.inputs.limit || '0' }}"
+          CHUNK=400
+          # job timeout is 350min; stop starting new chunks after 320min so the
+          # last running chunk still has time to finish and commit before kill.
+          DEADLINE=$(( $(date +%s) + 320*60 ))
+          PROCESSED=0
+
+          while true; do
+            BEFORE=$(wc -l < "$OUT" 2>/dev/null || echo 0)
+
+            if [ "$TOTAL_LIMIT" != "0" ]; then
+              REMAINING=$(( TOTAL_LIMIT - PROCESSED ))
+              if [ "$REMAINING" -le 0 ]; then break; fi
+              THIS_LIMIT=$(( REMAINING < CHUNK ? REMAINING : CHUNK ))
+            else
+              THIS_LIMIT=$CHUNK
+            fi
+
+            python -m src.datasets.diversify_rationale \
+              --backend groq \
+              --model llama-3.3-70b-versatile \
+              --evidence-index-file dataset/instruction/evidence_grounded_seed/evidence_index.json \
+              --resume \
+              --workers "${{ github.event.inputs.workers || '2' }}" \
+              --limit "$THIS_LIMIT"
+
+            AFTER=$(wc -l < "$OUT" 2>/dev/null || echo 0)
+            ADDED=$(( AFTER - BEFORE ))
+            PROCESSED=$(( PROCESSED + ADDED ))
+
+            git add "$OUT" "$STATS"
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: rationale checkpoint $(date -u +%Y-%m-%dT%H:%M:%SZ) (+$ADDED)"
+              git push
+            fi
+
+            if [ "$ADDED" -eq 0 ]; then
+              echo "no new records this chunk — nothing left to process. done."
+              break
+            fi
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "approaching job timeout; stopping loop, next scheduled run will resume."
+              break
+            fi
+          done
